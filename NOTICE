@@ -1,0 +1,33 @@
+incident-triage-agent
+Copyright 2026 Volker Schmidt
+
+This product includes software developed by the author and is licensed under the
+Apache License, Version 2.0 (see LICENSE).
+
+This distribution bundles the Apache Maven Wrapper (mvnw, mvnw.cmd, .mvn/), which is
+Copyright The Apache Software Foundation and is also licensed under the Apache License,
+Version 2.0.
+
+Trademark attributions
+----------------------
+This project is an independent, unofficial learning example. It is not affiliated with,
+endorsed by, or sponsored by any of the organizations named below. All product and
+company names are used solely to identify the technologies the project integrates with
+(nominative use).
+
+  Spring, Spring Boot and Spring AI are trademarks of Broadcom Inc. and/or its
+  subsidiaries.
+
+  Java and OpenJDK are trademarks or registered trademarks of Oracle and/or its
+  affiliates.
+
+  GitHub and GitHub Copilot are trademarks of GitHub, Inc.
+
+  OpenAI and GPT are trademarks of OpenAI.
+
+  Qwen is a trademark of Alibaba Group.
+
+  Docker is a trademark of Docker, Inc.
+
+All other trademarks and copyrights are the property of their respective owners and are
+mentioned for informative purposes only.

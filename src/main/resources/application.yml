@@ -1,0 +1,35 @@
+spring:
+  application:
+    name: incident-triage-agent
+
+  ai:
+    # Default model provider: local, open-source Qwen3 via Ollama (offline-friendly, no API key).
+    ollama:
+      base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
+      chat:
+        model: ${OLLAMA_MODEL:qwen3:14b}
+        options:
+          temperature: 0.2
+      embedding:
+        model: ${OLLAMA_EMBEDDING_MODEL:nomic-embed-text}
+    openai:
+      # Not used unless the "openai" profile is active; api-key must be supplied via env var.
+      api-key: ${OPENAI_API_KEY:}
+
+logging:
+  level:
+    org.springframework.ai: INFO
+
+---
+# Optional profile: swap the default Ollama/Qwen3 model for an OpenAI-compatible one,
+# demonstrating Spring AI's model-agnostic ChatClient abstraction. Activate with:
+#   --spring.profiles.active=openai
+spring:
+  config:
+    activate:
+      on-profile: openai
+  ai:
+    openai:
+      chat:
+        options:
+          model: ${OPENAI_MODEL:gpt-4o-mini}

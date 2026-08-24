@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SpotBugs exclude filter for incident-triage-agent.
+  Add <Match> entries here only with a justifying comment when a finding is a
+  confirmed false positive or an accepted, documented risk — do not use this file
+  to silently suppress real issues.
+-->
+<FindBugsFilter>
+  <Match>
+    <!-- RunbookRepository intentionally fails fast at startup if runbook markdown files
+         cannot be read from the classpath; this is a deliberate Spring bean
+         initialization failure, not a resource/finalizer safety issue. -->
+    <Class name="eu.volsch.lab.tool.RunbookRepository"/>
+    <Bug pattern="CT_CONSTRUCTOR_THROW"/>
+  </Match>
+  <Match>
+    <!-- These classes store Spring-managed singleton collaborators (the shared VectorStore and the
+         ToolCallRecorder) injected via constructor. They are dependencies to be used, not mutable
+         value objects the caller expects the class to own or defensively copy, so storing the
+         reference directly is the intended dependency-injection pattern rather than an exposure of
+         internal representation. -->
+    <Or>
+      <Class name="eu.volsch.lab.agent.TriageAgentService"/>
+      <Class name="eu.volsch.lab.tool.RunbookSearchTool"/>
+      <Class name="eu.volsch.lab.tool.RunbookSemanticSearchTool"/>
+      <Class name="eu.volsch.lab.tool.SystemStatusTool"/>
+    </Or>
+    <Bug pattern="EI_EXPOSE_REP2"/>
+  </Match>
+</FindBugsFilter>
