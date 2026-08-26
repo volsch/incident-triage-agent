@@ -36,9 +36,16 @@ These exist because they are the substance of the demo — don't quietly undo th
 - **`ToolCallRecorder` is per-run and thread-bound.** `TriageAgentService` brackets each
   run with `start()` and a `finally { clear(); }`. Keep that bracketing, or entries leak
   between requests sharing a pooled thread.
-- **The severity rubric lives in two places** — the system prompt in `TriageAgentService`
-  and the `Severity` enum's Javadoc. Change both together, otherwise the code documents a
-  scale the model was never given.
+- **Never combine `.tools(...)` with `.entity(...)` in one `ChatClient` call.**
+  `TriageAgentService` deliberately runs two calls — investigate (tools, prose), then
+  structure (no tools, `entity`). Spring AI implements `entity(...)` by appending "only
+  provide a RFC8259 compliant JSON response" to the user message, which overrides the
+  instruction to call tools: the model skips tool calling and returns a well-formed
+  assessment with empty `evidence`, with no error anywhere. Merging the two calls back
+  together silently destroys the evidence guarantee above.
+- **The severity rubric lives in two places** — `ASSESSMENT_SYSTEM_PROMPT` in
+  `TriageAgentService` and the `Severity` enum's Javadoc. Change both together, otherwise
+  the code documents a scale the model was never given.
 - **Both runbook tools must search the same corpus, chunked the same way** (via
   `Runbooks.splitSections`). That equivalence is what makes comparing lexical and
   semantic retrieval meaningful.
@@ -133,6 +140,8 @@ These exist because they are the substance of the demo — don't quietly undo th
   ```bash
   ./mvnw test -Pintegration-test
   ```
+  One of its tests asserts `evidence` is **non-empty** against the real model. That
+  assertion is the only thing that catches tool calling silently not happening — keep it.
 - The `searchRunbookSemantic` tool indexes its `VectorStore` **lazily**, on
   first call — never at application-context startup — so plain `@SpringBootTest`
   context-loads checks never require a live embedding model.

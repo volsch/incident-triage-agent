@@ -2,8 +2,9 @@ package eu.volsch.lab.model;
 
 /**
  * Coarse incident severity classification used in the structured triage output. The thresholds
- * below mirror the rubric given to the model in {@code TriageAgentService}'s system prompt — keep
- * the two in sync, otherwise the enum documents one scale while the model applies another.
+ * below mirror the rubric given to the model in {@code TriageAgentService}'s assessment system
+ * prompt — keep the two in sync, otherwise the enum documents one scale while the model applies
+ * another.
  */
 public enum Severity {
 

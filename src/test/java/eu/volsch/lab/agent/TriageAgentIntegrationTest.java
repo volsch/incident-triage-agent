@@ -61,4 +61,26 @@ class TriageAgentIntegrationTest {
     assertThat(assessment.severity()).isNotNull();
     assertThat(assessment.incidentSummary()).isNotBlank();
   }
+
+  /**
+   * Guards the invariant the whole design rests on: the model must genuinely invoke the
+   * {@code @Tool} methods, and the reported evidence must be the recorded result of those real
+   * calls.
+   *
+   * <p>This is not hypothetical. Asking for tools and structured output in a single call silently
+   * produces a well-formed assessment with empty evidence, because Spring AI's "reply only with
+   * JSON" instructions win over the instruction to call tools. Only an assertion on {@code
+   * evidence} catches that — everything else about the response still looks correct.
+   */
+  @Test
+  void evidenceComesFromToolCallsThatActuallyRan() {
+    IncidentAssessment assessment =
+        triageAgentService.triage("customer-api returning 5xx errors for the past 10 minutes");
+
+    assertThat(assessment.evidence())
+        .as("the agent must gather evidence via real tool calls, not answer from memory")
+        .isNotEmpty();
+    assertThat(assessment.evidence())
+        .allSatisfy(entry -> assertThat(entry).contains("(").contains(") -> "));
+  }
 }

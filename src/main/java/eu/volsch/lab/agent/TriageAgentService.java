@@ -14,13 +14,17 @@ import org.springframework.stereotype.Service;
  * tool-calling loop, and maps the final model response into a structured {@link
  * IncidentAssessment}.
  *
+ * <p>The run is split into two model calls — investigate with tools, then structure the findings —
+ * because Spring AI's structured-output instructions suppress tool calling when both are requested
+ * at once. See {@link #triage(String)} for why.
+ *
  * <p>This is advisory only: the agent is read-only and cannot perform any corrective infrastructure
  * action. Output is non-deterministic and intended for human review.
  */
 @Service
 public class TriageAgentService {
 
-  private static final String SYSTEM_PROMPT =
+  private static final String INVESTIGATION_SYSTEM_PROMPT =
       """
             You are an incident triage assistant for a software operations team.
             Given a raw incident description, use the available tools to gather evidence:
@@ -31,8 +35,21 @@ public class TriageAgentService {
             - searchRunbookSemantic(query): look up relevant local runbook excerpts by semantic
               (embedding-based) similarity; prefer this when the incident wording does not share
               exact keywords with the runbooks, or to double-check searchRunbook's results.
-            Identify the affected service(s) from the description, call the tools as needed,
-            then produce a structured assessment.
+            Identify the affected service(s) from the description and call the tools as needed.
+
+            When you have gathered enough, report in plain prose what the tools actually
+            returned: the observed metrics and alerts, and the runbook guidance that applies.
+            Do not answer from memory — if you called no tools, say so plainly.
+            Do not output JSON, and do not classify severity; a later step does that.
+            You are strictly advisory: never claim to have taken any corrective action.
+            """;
+
+  private static final String ASSESSMENT_SYSTEM_PROMPT =
+      """
+            You are an incident triage assistant for a software operations team. You are given
+            an incident description and the findings already gathered from the operations tools.
+            Turn them into a structured assessment, using only those findings — never invent
+            metrics, alerts or runbook guidance that the findings do not mention.
 
             Classify severity using these definitions, based on what the tools actually reported:
             - CRITICAL: service is down or unusable for most users; error rate above 25%.
@@ -41,15 +58,19 @@ public class TriageAgentService {
             - MEDIUM: noticeable but contained degradation; error rate 1-5%, or elevated
               latency without widespread failures.
             - LOW: little or no user impact; healthy metrics, or a purely informational report.
-            If the tools report no data for a service, do not assume the worst: prefer LOW or
+            If the findings report no data for a service, do not assume the worst: prefer LOW or
             MEDIUM and say explicitly that status data was unavailable.
 
             Keep incidentSummary to one or two factual sentences, and make recommendedNextSteps
-            concrete, ordered, and drawn from the runbooks you retrieved.
+            concrete, ordered, and drawn from the runbook guidance in the findings.
             Leave the evidence field empty: it is filled in automatically from the actual tool
             results, so never invent, paraphrase or restate tool output there.
             You are strictly advisory: never claim to have taken any corrective action.
             """;
+
+  private static final String ASSESSMENT_USER_PREFIX = "Incident description:\n";
+
+  private static final String ASSESSMENT_USER_FINDINGS = "\n\nFindings gathered from the tools:\n";
 
   private final ChatClient chatClient;
   private final SystemStatusTool systemStatusTool;
@@ -86,6 +107,13 @@ public class TriageAgentService {
    * Runs the tool-calling triage loop for a raw incident description and maps the model's final
    * response into a structured {@link IncidentAssessment}.
    *
+   * <p>This deliberately runs as two model calls. Spring AI implements {@code entity(...)} by
+   * appending JSON-schema instructions ("only provide a RFC8259 compliant JSON response") to the
+   * user message, which directly contradicts an instruction to call tools first: models — small
+   * ones especially — obey the stricter "answer only in JSON" directive and skip tool calling
+   * entirely, silently producing an assessment with no evidence behind it. Investigating first
+   * (tools, prose) and structuring afterwards (no tools) keeps both halves reliable.
+   *
    * <p>The returned {@code evidence} is not the model's own account of its investigation but the
    * recorded results of the tool calls that genuinely happened, so it cannot be hallucinated. The
    * severity, summary and next steps remain model-generated and therefore advisory.
@@ -98,14 +126,7 @@ public class TriageAgentService {
   public IncidentAssessment triage(String incidentDescription) {
     toolCallRecorder.start();
     try {
-      IncidentAssessment assessment =
-          chatClient
-              .prompt()
-              .system(SYSTEM_PROMPT)
-              .user(incidentDescription)
-              .tools(systemStatusTool, runbookSearchTool, runbookSemanticSearchTool)
-              .call()
-              .entity(IncidentAssessment.class);
+      IncidentAssessment assessment = assess(incidentDescription, investigate(incidentDescription));
       if (assessment == null) {
         throw new IllegalStateException(
             "The model returned a response that could not be mapped to an IncidentAssessment");
@@ -114,5 +135,42 @@ public class TriageAgentService {
     } finally {
       toolCallRecorder.clear();
     }
+  }
+
+  /**
+   * Phase one: lets the model call the tools and report what they returned, as plain prose.
+   *
+   * <p>No structured-output conversion happens here, precisely so nothing competes with the
+   * instruction to call tools.
+   *
+   * @param incidentDescription the raw, free-text incident description
+   * @return the model's prose account of the tool results, never {@code null}
+   */
+  private String investigate(String incidentDescription) {
+    String findings =
+        chatClient
+            .prompt()
+            .system(INVESTIGATION_SYSTEM_PROMPT)
+            .user(incidentDescription)
+            .tools(systemStatusTool, runbookSearchTool, runbookSemanticSearchTool)
+            .call()
+            .content();
+    return findings == null ? "" : findings;
+  }
+
+  /**
+   * Phase two: converts the gathered findings into the typed assessment, with no tools attached.
+   *
+   * @param incidentDescription the raw, free-text incident description
+   * @param findings the prose findings produced by {@link #investigate(String)}
+   * @return the mapped assessment, or {@code null} if the model's reply could not be mapped
+   */
+  private IncidentAssessment assess(String incidentDescription, String findings) {
+    return chatClient
+        .prompt()
+        .system(ASSESSMENT_SYSTEM_PROMPT)
+        .user(ASSESSMENT_USER_PREFIX + incidentDescription + ASSESSMENT_USER_FINDINGS + findings)
+        .call()
+        .entity(IncidentAssessment.class);
   }
 }

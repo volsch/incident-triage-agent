@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -16,6 +18,8 @@ import eu.volsch.lab.tool.ToolCallRecorder;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.ai.chat.client.ChatClient;
@@ -29,6 +33,8 @@ import org.springframework.ai.chat.client.ChatClient;
  */
 @ExtendWith(MockitoExtension.class)
 class TriageAgentServiceTest {
+
+  private static final String FINDINGS = "getSystemStatus reported an elevated 5xx error rate";
 
   @Mock private ChatClient chatClient;
   @Mock private ChatClient.ChatClientRequestSpec requestSpec;
@@ -46,10 +52,14 @@ class TriageAgentServiceTest {
     when(requestSpec.tools(any(Object[].class))).thenReturn(requestSpec);
   }
 
-  /** Stubs the whole fluent chain so the mocked chat client returns the given assessment. */
+  /**
+   * Stubs the whole two-phase fluent chain: the investigation call returns prose, the assessment
+   * call returns the given structured response.
+   */
   private TriageAgentService serviceReturning(IncidentAssessment modelResponse) {
     stubPromptChain();
     when(requestSpec.call()).thenReturn(callResponseSpec);
+    when(callResponseSpec.content()).thenReturn(FINDINGS);
     when(callResponseSpec.entity(IncidentAssessment.class)).thenReturn(modelResponse);
     return newService();
   }
@@ -83,6 +93,43 @@ class TriageAgentServiceTest {
     verify(requestSpec)
         .tools((Object) systemStatusTool, runbookSearchTool, runbookSemanticSearchTool);
     verify(requestSpec).user("customer-api returning 5xx errors for the past 10 minutes");
+  }
+
+  @Test
+  void investigatesWithToolsBeforeAskingForTheStructuredAssessment() {
+    TriageAgentService service =
+        serviceReturning(
+            new IncidentAssessment(Severity.LOW, "summary", List.of(), List.of("step")));
+    when(toolCallRecorder.recordedCalls()).thenReturn(List.of());
+
+    service.triage("customer-api returning 5xx errors");
+
+    // Structured-output instructions suppress tool calling when both are requested in one call,
+    // so the tools must run in their own prose call before the assessment is mapped.
+    InOrder inOrder = inOrder(requestSpec, callResponseSpec);
+    inOrder
+        .verify(requestSpec)
+        .tools((Object) systemStatusTool, runbookSearchTool, runbookSemanticSearchTool);
+    inOrder.verify(callResponseSpec).content();
+    inOrder.verify(callResponseSpec).entity(IncidentAssessment.class);
+    verify(requestSpec, times(1)).tools(any(Object[].class));
+  }
+
+  @Test
+  void passesTheGatheredFindingsIntoTheAssessmentPrompt() {
+    TriageAgentService service =
+        serviceReturning(
+            new IncidentAssessment(Severity.LOW, "summary", List.of(), List.of("step")));
+    when(toolCallRecorder.recordedCalls()).thenReturn(List.of());
+
+    service.triage("customer-api is failing");
+
+    ArgumentCaptor<String> userMessages = ArgumentCaptor.forClass(String.class);
+    verify(requestSpec, times(2)).user(userMessages.capture());
+    assertThat(userMessages.getAllValues().get(0)).isEqualTo("customer-api is failing");
+    assertThat(userMessages.getAllValues().get(1))
+        .contains(FINDINGS)
+        .contains("customer-api is failing");
   }
 
   @Test

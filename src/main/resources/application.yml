@@ -8,6 +8,13 @@ spring:
       base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
       chat:
         model: ${OLLAMA_MODEL:qwen3:14b}
+        # Chain-of-thought "thinking" mode. Left unset by default so the flag is not sent
+        # at all and each model keeps its own default (Qwen3/DeepSeek-R1 think, others
+        # don't). Set OLLAMA_THINK=false for direct answers without reasoning tokens -
+        # much faster, at the cost of accuracy on harder cases. Do not set it to true for
+        # a model without thinking support: Ollama rejects the request outright with
+        # '"<model>" does not support thinking'.
+        think: ${OLLAMA_THINK:}
         options:
           temperature: 0.2
       embedding:

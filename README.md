@@ -17,13 +17,16 @@ production readiness.
 - [Core Concepts](#core-concepts)
   - [Why an LLM needs tools](#why-an-llm-needs-tools)
   - [What "agent" means here](#what-agent-means-here)
+  - [Why a single agent, not multi-agent](#why-a-single-agent-not-multi-agent)
   - [Why retrieval (RAG) instead of a bigger prompt](#why-retrieval-rag-instead-of-a-bigger-prompt)
   - [Retrieval as a tool: agentic RAG](#retrieval-as-a-tool-agentic-rag)
   - [Who does what: model, Spring AI, engine](#who-does-what-model-spring-ai-engine)
+  - [Ollama's role, and how tool calls are actually transmitted](#ollamas-role-and-how-tool-calls-are-actually-transmitted)
 - [What It Does](#what-it-does)
   - [Why two search tools](#why-two-search-tools-a-worked-example)
   - [Evidence is recorded, not narrated](#evidence-is-recorded-not-narrated)
 - [How It Works](#how-it-works)
+  - [Why two model calls, not one](#why-two-model-calls-not-one)
 - [Why Open-Source Models](#why-open-source-models)
 - [Getting Started](#getting-started)
 - [Configuration](#configuration)
@@ -95,12 +98,91 @@ Equally important is what this agent deliberately is **not**:
 |-----|---------|
 | Not autonomous | It runs once, per HTTP request, and stops. Nothing runs in the background or on a schedule |
 | Not stateful | No memory between requests; each triage starts from a clean conversation |
-| Not multi-agent | One model, one loop. No planner/critic/worker roles handing off to each other |
+| Not multi-agent | One agent loop. The [second model call](#why-two-model-calls-not-one) that formats the result has no tools and no loop — it's a converter, not another agent |
 | Not acting on the world | Every tool is read-only — it can look, and recommend, but never change anything |
 
 That's the small, honest end of the agent spectrum, and it is where the interesting
 mechanics actually live. Everything beyond it — planning, memory, autonomy, delegation —
 is built on top of this same loop.
+
+### Why a single agent, not multi-agent
+
+Multi-agent systems and "agent pipelines" come up a lot in the wider literature, so it's
+worth saying what they are, and where this project's design does and doesn't line up
+with them, rather than leaving it as an unexplained bullet point above.
+
+The common thread across multi-agent designs is **more than one model+tools+loop
+running, each with a narrower job, coordinated by something else**:
+
+| Pattern | What it looks like |
+|---------|---------------------|
+| **Orchestrator/worker** | A supervisor agent breaks a task into subtasks and delegates each to a specialized worker agent (e.g. one that only searches runbooks, one that only reads metrics), then assembles their outputs |
+| **Planner/critic** | One agent proposes an answer, a second agent reviews or challenges it before it's returned — a built-in second opinion |
+| **Pipeline of agents** | The output of one agent becomes the input prompt of the next, in a fixed sequence (as opposed to a fixed *data* pipeline like classic RAG — here each stage is itself a full model+tools+loop) |
+| **Parallel specialists** | Several agents work concurrently on independent slices of a problem (e.g. one per affected service) and a final step merges their findings |
+
+These exist to solve problems this project doesn't have: tasks too large for one
+context window or one coherent train of thought, roles that genuinely need different
+tools/models/prompts (a cheap model for retrieval, an expensive one for judgment), work
+that parallelizes across independent subtasks, or a need for an explicit adversarial
+check on the model's own output.
+
+Incident triage on one free-text description doesn't need any of that: it's one
+question, answerable with a handful of tool calls inside a single agent loop. Introducing
+a planner or a critic agent here would mean *two or more* of these single-agent loops
+coordinating with each other — genuinely useful at larger scale, but it would multiply
+the moving parts (more prompts, more failure modes, more of exactly the
+["did the model actually call the tool?"](#ollamas-role-and-how-tool-calls-are-actually-transmitted)
+uncertainty this project tries to make legible) without adding anything to what this
+repo is trying to teach. Understanding one agent loop clearly, including where it can go
+wrong, is also the prerequisite for reasoning about several of them — which is why this
+project deliberately stops there.
+
+**But doesn't the two-call split make this a pipeline?** A fair challenge, and worth
+being precise about, because the [investigate-then-structure split](#why-two-model-calls-not-one)
+genuinely is a fixed two-step chain — in Anthropic's vocabulary, *prompt chaining* in its
+most minimal form. What it is not is multi-agent, and the distinction is the one used
+throughout this README: an agent is a model **with tools and a loop**. The second call
+has neither. No tools are attached, nothing iterates, and it decides nothing about what
+to investigate — it converts prose the agent already produced into a typed record.
+Replacing it with a deterministic parser (if prose were reliably parseable) would change
+the robustness, not the architecture. So: one agent, plus a formatting step — not two
+agents, and nothing coordinating them.
+
+If this triage agent were extended toward multi-agent, the natural next step would be
+an orchestrator that fans a batch of simultaneous incidents out to one triage agent
+instance per incident, run in parallel, then merges their assessments into a single
+report — each instance still being exactly the single agent described above.
+
+**Are these real terms, or just this README's own labels?** Real, established ones.
+Anthropic's widely-cited article
+["Building effective agents"](https://www.anthropic.com/engineering/building-effective-agents)
+is where "orchestrator-workers", "prompt chaining", "routing", "parallelization", and
+"evaluator-optimizer" (the planner/critic idea above) come from as named patterns.
+Spring AI's own reference documentation has a page of the
+[same title, "Building Effective Agents"](https://docs.spring.io/spring-ai/reference/api/effective-agents.html),
+deliberately mirroring Anthropic's, showing how to implement each pattern with
+`ChatClient`. So this isn't informal jargon — it's the vocabulary the framework itself
+uses.
+
+**Does Spring AI have a built-in "Orchestrator" or "Planner" class?** No. There's no
+dedicated multi-agent framework class to instantiate — every "agent" in every one of
+these patterns, orchestrator included, is just another `ChatClient` bean, built the same
+way `ChatClientConfig` builds this project's one. Composing them is ordinary Java: an
+orchestrator method calls `.call()` on a worker `ChatClient` the same way this repo's
+tools call external logic, then feeds worker outputs into the next call. The piece of
+Spring AI that *is* purpose-built for cross-cutting agent behavior is the
+[Advisors API](https://docs.spring.io/spring-ai/reference/api/advisors.html) —
+interceptors wrapped around a `ChatClient` call, e.g. `MessageChatMemoryAdvisor` for
+conversation memory, or `RetrievalAugmentationAdvisor` (in the separate `spring-ai-rag`
+module, which this project does not depend on) for classic pipeline-style RAG
+(see [above](#why-retrieval-rag-instead-of-a-bigger-prompt)) — but advisors decorate a
+single agent's call, they don't coordinate several agents with each other. For
+coordination *across separate services/processes* rather than within
+one JVM, there's a community add-on,
+[`spring-ai-community/spring-ai-a2a`](https://github.com/spring-ai-community/spring-ai-a2a),
+implementing the Agent2Agent (A2A) protocol — originally from Google, donated to the
+Linux Foundation in 2025 — which is not part of core Spring AI, and not used here.
 
 ### Why retrieval (RAG) instead of a bigger prompt
 
@@ -119,10 +201,46 @@ the model; the facts come from your corpus. Here that's deliberately minimal —
 markdown files, an in-memory vector store — because the pattern, not the scale, is the
 point.
 
+A "classic" RAG pipeline wires that idea in as a **fixed sequence run on every
+request**, with no branching and no model involvement in the retrieval step itself:
+
+1. Embed the incoming query with an embedding model (here, `nomic-embed-text`).
+2. Run a similarity search against a vector store of pre-embedded document chunks (here,
+   the runbooks split by `Runbooks.splitSections`) and take the top-*k* matches.
+3. Concatenate those chunks into the prompt — typically as a "Context:" block ahead of
+   the user's question.
+4. Make **one** call to the chat model with that augmented prompt, and return its
+   answer.
+
+Nothing here is agentic: the same four steps run whether or not the retrieved chunks
+turn out to be useful, and the model never gets to ask a follow-up question or decide it
+needs a different search.
+
+Step 3 has a hard limit that any RAG design — pipeline or agentic — has to respect: a
+model's **context window** (its maximum input+output size, measured in tokens) is
+finite, and the system prompt, tool schemas, conversation history, and every retrieved
+chunk all compete for that same budget. `ollama show <model>` reports it per model — for
+example `qwen3:8b` reports a 40,960-token context length. That's why
+retrieval never dumps whole documents: chunking (here, by `##` heading) keeps each
+retrievable unit small, and similarity search's `topK` (3 here) and score `threshold`
+(0.5 here) bound how many chunks are added, so the prompt stays a small, bounded slice of
+the corpus no matter how large the corpus grows. A pipeline that retrieved too much, or
+chunked too coarsely, would silently truncate context or crowd out the actual question —
+a failure mode worth knowing about even though this repo's three short runbooks are far
+from hitting it.
+
 ### Retrieval as a tool: agentic RAG
 
-Textbook RAG is a fixed pipeline: **every** request is embedded, searched, and the hits
-are stapled into the prompt before the model ever runs. The model has no say in it.
+Applied to this repo, a classic pipeline would look like: before calling `chatClient`,
+`TriageAgentService` would unconditionally embed `incidentDescription`, call
+`VectorStore.similaritySearch(...)` itself, splice the top matches into the system
+prompt as a fixed "Context" section, and only then send one prompt to the model —
+`searchRunbook`/`searchRunbookSemantic` would not exist as `@Tool` methods at all, and
+`getSystemStatus` would need its own hard-coded pre-fetch too, since nothing decides at
+request time which service(s) the incident concerns. (Spring AI ships a ready-made
+building block for exactly this shape, `RetrievalAugmentationAdvisor` — see
+[Retrieval Augmented Generation](https://docs.spring.io/spring-ai/reference/api/retrieval-augmented-generation.html) —
+which this repo deliberately does not use, in favor of exposing retrieval as a tool.)
 
 This project instead exposes retrieval **as a tool the model may call**:
 
@@ -147,12 +265,45 @@ The most common misconception about tool calling is that the model executes some
 |-------|----------------|
 | **Engine** (Ollama / OpenAI) | Hosts and runs the model; must support the tool-calling API. Serves two distinct models here: a *chat* model that reasons, and an *embedding* model that turns text into vectors |
 | **Model** (Qwen3, GPT-4o-mini, …) | Decides *whether*, *which* and *how many times* to call a tool, and with what arguments. Emits that as structured JSON — and nothing more |
-| **Spring AI** (`ChatClient`) | Advertises the `@Tool` methods and their generated JSON schemas to the model, parses the model's tool request, binds JSON arguments to Java parameters, invokes the bean method, serializes the return value back into the conversation, and repeats until the model stops asking. Finally maps the closing message onto a Java record |
+| **Spring AI** (`ChatClient`) | Advertises the `@Tool` methods and their generated JSON schemas to the model, parses the model's tool request, binds JSON arguments to Java parameters, invokes the bean method, serializes the return value back into the conversation, and repeats until the model stops asking. Separately, it maps a model reply onto a Java record (see [Why two model calls](#why-two-model-calls-not-one)) |
 | **Your Java code** | The tool bodies and the surrounding service. Plain methods with an annotation — no prompt parsing, no HTTP plumbing, no loop management |
 
 So the "agent loop" everyone talks about is, concretely, that Spring AI middle row. This
 repository exists to show it working on real code, and to be explicit about which parts
 are the framework's and which are yours.
+
+### Ollama's role, and how tool calls are actually transmitted
+
+[Ollama](https://ollama.com) is a local model runtime: it downloads quantized model
+weights plus a per-model "Modelfile" (chat template, default parameters) and serves them
+over a REST API on `http://localhost:11434`, so the whole request/response loop above
+runs on your machine with no API key or per-token cost. It hosts both models this
+project uses — the chat model that reasons, and the `nomic-embed-text` embedding model
+that powers semantic runbook search.
+
+Tool calling has no single universal wire format. OpenAI defined the JSON shape most
+others converged on — a `tools` array of `{type: "function", function: {name,
+description, parameters: <JSON Schema>}}` in the request, and a `tool_calls` array in
+the response — and Ollama's API deliberately mirrors that shape. Google Gemini and AWS
+Bedrock instead use their own, differently-structured protocols (`functionDeclarations`/
+`functionCall` for Gemini; a per-model-family native format normalized by Bedrock's
+Converse API).
+
+Spring AI hides all of that behind one Java API: `@Tool` methods are reflected into a
+portable `ToolDefinition`, and a provider-specific module (`spring-ai-ollama`,
+`spring-ai-openai`, …) translates it into that vendor's wire format and parses the
+reply back into a portable tool-call representation before Spring AI's execution loop
+invokes your method. That's what lets [Using OpenAI instead](#using-openai-instead) swap
+providers without touching `TriageAgentService`.
+
+The catch: Ollama can only forward a tool request in its OpenAI-like shape — whether the
+*model* actually understands and responds to it depends entirely on whether that
+model's Modelfile chat template defines tool-call syntax at all. A model without one
+(e.g. `phi4-mini` at the time of writing) will just narrate a plausible-looking tool
+call as plain text instead of emitting a real one, silently breaking the evidence trail
+described below. Spring AI's translation layer can't compensate for a model/template
+that was never trained on tool-calling syntax — see the tool-calling requirement called
+out in [Configuration](#configuration).
 
 ## What It Does
 
@@ -247,6 +398,11 @@ the model overreached. It's a small, concrete answer to "how do you keep an LLM
 accountable?" — and it's what the [Human-in-the-Loop](#explicit-scope--limitations)
 caveat rests on.
 
+It also has to be *earned*: recording real tool results is worthless if the model never
+calls the tools. That is exactly what happens if the agent asks for tool use and
+structured output in the same request, which is why the run is split into
+[two model calls](#why-two-model-calls-not-one).
+
 #### Severity is defined, not guessed
 
 The system prompt gives the model an explicit rubric instead of leaving `HIGH` versus
@@ -278,7 +434,10 @@ sequenceDiagram
 
     Client->>Controller: POST /api/triage<br/>{ "description": "..." }
     Controller->>Agent: triage(description)
-    Agent->>ChatClient: prompt(system + user, tools=[3 tools])
+
+    rect rgb(238, 246, 255)
+    note over Agent,Tools: Phase 1 — investigate (tools attached, prose answer)
+    Agent->>ChatClient: prompt(investigation system + user, tools=[3 tools])
     ChatClient->>LLM: chat request
 
     loop tool-calling cycle (0..n times, model-driven)
@@ -289,8 +448,18 @@ sequenceDiagram
         ChatClient->>LLM: tool result appended to conversation
     end
 
-    LLM-->>ChatClient: final natural-language response
+    LLM-->>ChatClient: prose findings
+    ChatClient-->>Agent: .content()
+    end
+
+    rect rgb(245, 240, 255)
+    note over Agent,LLM: Phase 2 — structure (no tools attached)
+    Agent->>ChatClient: prompt(assessment system + description + findings)
+    ChatClient->>LLM: chat request (+ JSON schema instructions)
+    LLM-->>ChatClient: JSON response
     ChatClient-->>Agent: .entity(IncidentAssessment.class)
+    end
+
     Agent->>Recorder: recordedCalls()
     Recorder-->>Agent: verified evidence
     Agent-->>Controller: IncidentAssessment (evidence replaced)
@@ -300,6 +469,68 @@ sequenceDiagram
 Every arrow between `ChatClient` and `Tools` is Spring AI's work, not the model's: the
 model only ever emits a tool *request*, and Spring AI resolves, invokes and feeds back
 the result until the model stops asking.
+
+### Why two model calls, not one
+
+The obvious implementation attaches the tools *and* asks for the typed result in a
+single call:
+
+```java
+chatClient.prompt().system(...).user(...)
+    .tools(systemStatusTool, runbookSearchTool, runbookSemanticSearchTool)
+    .call()
+    .entity(IncidentAssessment.class);   // looks right, quietly isn't
+```
+
+That does not work, and it fails in the most misleading way possible. Spring AI
+implements `entity(...)` with a `BeanOutputConverter`, which appends the JSON schema and
+these instructions to the **user message**:
+
+> Your response should be in JSON format. Do not include any explanations, only provide a
+> RFC8259 compliant JSON response following this format without deviation.
+
+"Only provide a JSON response, no explanations" contradicts "call the tools first". Most
+models resolve the conflict by obeying the stricter, more recent instruction: they skip
+tool calling entirely and answer immediately from prior knowledge. The response is still
+a perfectly valid `IncidentAssessment` — plausible severity, confident summary — but
+`evidence` comes back empty, because no tool ever ran. Nothing errors; the assessment is
+simply invented.
+
+Splitting the run resolves the conflict by never asking for both at once:
+
+1. **Investigate** — tools attached, plain prose requested, no schema instructions. The
+   model is free to call tools, and `ToolCallRecorder` captures what they really
+   returned.
+2. **Structure** — no tools attached, `entity(IncidentAssessment.class)` applied to the
+   findings from step 1.
+
+The cost is one extra round-trip. The benefit is that both halves are reliable, and the
+`evidence` guarantee below is actually enforceable. `TriageAgentIntegrationTest` asserts
+`evidence` is non-empty against a real model precisely so this regression cannot return
+unnoticed.
+
+**Why not keep it to a single call anyway?** `entity(...)` isn't the only way to get JSON
+out of the model. `BeanOutputConverter` also exposes `getFormat()`/`convert(String)` as
+plain methods, so a single-conversation design is possible: attach the tools, put the
+JSON format instructions in the **system** prompt instead of injecting them into the user
+message on every turn, let the tool-calling loop run to completion via `.content()`, then
+call `BeanOutputConverter.convert(...)` on the final text by hand. That does avoid the
+literal defect above, because the format instructions are no longer re-injected next to
+the user's request on each turn.
+
+It was tried against this repo's actual models and rejected, not on principle but on
+evidence: with `qwen3:8b` it worked — the tool call happened, and the follow-up turn
+produced clean JSON. With `qwen2.5:1.5b` — the small model `TriageAgentIntegrationTest`
+deliberately uses so CI stays fast — the same design skipped the tool call and invented an
+answer anyway, just like `entity(...)` did, because a system prompt that says both "you
+must call the tool" and "answer only in JSON" is still asking a small model to hold two
+competing instructions at once. A much more forceful, repeated system prompt eventually
+got it to call the tool, but then it sent malformed arguments in roughly a third of
+attempts. Splitting the run avoids tuning around a specific model's quirks: step 1 never
+mentions JSON at all, so there is no competing instruction for *any* model to resolve
+incorrectly. The extra round-trip buys model-agnostic reliability, which matters more
+here than shaving one call, especially since the CI integration test intentionally runs
+against the weakest available model.
 
 ### Component overview
 
@@ -425,6 +656,7 @@ a different server or model:
 |----------|---------|---------|
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Address of the Ollama server |
 | `OLLAMA_MODEL` | `qwen3:14b` | Chat model that drives the agent |
+| `OLLAMA_THINK` | *(unset)* | `false` disables chain-of-thought "thinking" mode; see [Disabling "thinking" mode](#disabling-thinking-mode) |
 | `OLLAMA_EMBEDDING_MODEL` | `nomic-embed-text` | Embedding model for semantic runbook search |
 | `OPENAI_API_KEY` | *(empty)* | Only needed with the `openai` profile |
 | `OPENAI_MODEL` | `gpt-4o-mini` | Only used with the `openai` profile |
@@ -439,6 +671,42 @@ OLLAMA_MODEL=qwen3:8b ./mvnw spring-boot:run
 
 > **The model must support tool calling.** Models without it will answer in prose
 > instead of invoking the tools, and structured-output mapping becomes unreliable.
+
+### Disabling "thinking" mode
+
+Qwen3 (and DeepSeek-R1) default to emitting a chain-of-thought "thinking" block before
+the final answer. It generally improves reasoning quality, but on CPU-only or
+memory-constrained hardware it is the dominant cost in request latency. Set
+`OLLAMA_THINK=false` to skip it and get a direct answer:
+
+```bash
+OLLAMA_MODEL=qwen3:8b OLLAMA_THINK=false ./mvnw spring-boot:run
+```
+
+This maps to Spring AI's `spring.ai.ollama.chat.think` property (`OllamaChatOptions`'s
+`ThinkOption`), which Ollama forwards as the native `think` flag on `/api/chat`.
+
+`OLLAMA_THINK` is deliberately **unset** by default, so the flag is omitted from the
+request and every model keeps its own default behaviour. That matters because the flag
+is not silently ignored by models that lack thinking support — Ollama rejects the whole
+request:
+
+```json
+{"error":"\"qwen2.5:1.5b\" does not support thinking"}
+```
+
+So `OLLAMA_THINK=false` is always safe, but only set `OLLAMA_THINK=true` for a model
+that actually supports it (`ollama show <model>` lists `thinking` under *Capabilities*).
+
+The actual difference in wall-clock time depends heavily on the hardware running
+Ollama: on a CPU-only or older machine it can be dramatic and highly variable run to
+run, while a modern GPU may barely notice it. Absolute numbers therefore aren't
+meaningful to publish here — measure it on your own machine if you care about the gap.
+The cost is not just higher on average, it is far less predictable, because the model
+can choose to reason for a little or a lot depending on the prompt. Turning it off
+trades some reasoning depth for latency that is both lower and more consistent, which is
+usually the right trade-off for local development and demoing this repository, as
+opposed to production-quality triage judgments.
 
 ### Using OpenAI instead
 
@@ -461,6 +729,25 @@ Alongside the default keyword-based `searchRunbook` tool, a second tool,
 pattern using Spring AI's `VectorStore`/`EmbeddingModel` abstractions. For *why*
 retrieval is used at all, and why it is exposed as a tool rather than as a fixed
 pre-prompt pipeline, see [Core Concepts](#core-concepts).
+
+### What an embedding model is
+
+An **embedding model** is a separate, much smaller model whose only job is to turn a
+piece of text into a fixed-length vector of numbers (for `nomic-embed-text`, 768 of
+them) that captures its *meaning* rather than its exact wording. It doesn't generate
+text and can't answer questions — it's a one-way text-to-vector function.
+
+The useful property: texts with similar meaning end up as vectors that are close
+together in that 768-dimensional space, measured by cosine similarity, **even when they
+share no words at all**. That's exactly what makes the
+[`"customers cannot log in"` example](#why-two-search-tools-a-worked-example) work —
+the query and `auth-failures.md` embed close together despite no vocabulary overlap.
+
+In this repo, the same embedding model embeds both sides of the comparison: every
+runbook chunk, once, when the vector store is lazily built, and every query, on each
+`searchRunbookSemantic` call. `VectorStore.similaritySearch` then ranks stored chunks by
+distance from the query's vector and returns the closest ones — that ranking is the
+entire "search."
 
 ```mermaid
 flowchart TD
