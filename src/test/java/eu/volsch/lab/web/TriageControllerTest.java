@@ -17,6 +17,7 @@ import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.web.client.ResourceAccessException;
 
 /** {@code @WebMvcTest} slice test for {@link TriageController}, with the agent service mocked. */
 @WebMvcTest(TriageController.class)
@@ -60,5 +61,21 @@ class TriageControllerTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(new TriageRequest(""))))
         .andExpect(status().isBadRequest());
+  }
+
+  @Test
+  void returnsServiceUnavailableWhenModelBackendIsDown() throws Exception {
+    when(triageAgentService.triage(anyString()))
+        .thenThrow(new ResourceAccessException("Connection refused"));
+
+    mockMvc
+        .perform(
+            post("/api/triage")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    objectMapper.writeValueAsString(
+                        new TriageRequest("customer-api returning 5xx errors"))))
+        .andExpect(status().isServiceUnavailable())
+        .andExpect(jsonPath("$.title").value("Model backend unavailable"));
   }
 }

@@ -19,6 +19,13 @@ spring:
           temperature: 0.2
       embedding:
         model: ${OLLAMA_EMBEDDING_MODEL:nomic-embed-text}
+    # Fail fast when the model backend is down instead of hanging through the default
+    # 10 retries with exponential backoff (which can stall a request for minutes).
+    retry:
+      max-attempts: 2
+      backoff:
+        initial-interval: 1s
+        max-interval: 3s
     openai:
       # Not used unless the "openai" profile is active; api-key must be supplied via env var.
       api-key: ${OPENAI_API_KEY:}

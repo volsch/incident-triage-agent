@@ -53,6 +53,12 @@ These exist because they are the substance of the demo — don't quietly undo th
   deliberate: a naive `contains()` matches "in" inside "instance", making every query
   return every runbook and rendering the tool (and its contrast with semantic search)
   worthless. `RunbookSearchToolTest` guards this.
+- **A down model backend must fail fast and clean, not hang.** When the Ollama/OpenAI
+  server is unreachable, Spring AI's default retry policy (10 attempts, exponential
+  backoff) stalls the request for minutes. `spring.ai.retry` in `application.yml` caps
+  this (2 attempts, short backoff), and `TriageExceptionHandler` maps the resulting
+  `ResourceAccessException` to a clean HTTP 503 problem-detail instead of a bare 500
+  stack trace. Keep both, or an offline backend hangs curl and dumps a stack trace.
 
 ## Package conventions
 
