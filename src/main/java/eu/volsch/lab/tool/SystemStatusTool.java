@@ -39,7 +39,7 @@ public class SystemStatusTool {
   public SystemStatus getSystemStatus(
       @ToolParam(description = "The service name to look up, e.g. 'customer-api'") String service) {
     SystemStatus status = store.lookup(service);
-    recorder.record("getSystemStatus", service, describe(status));
+    recorder.recordCall("getSystemStatus", service, describe(status));
     return status;
   }
 

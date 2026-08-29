@@ -81,6 +81,19 @@ These exist because they are the substance of the demo — don't quietly undo th
   ```
 - CI/build will fail (`spotless:check`) if code is not correctly formatted —
   always run `spotless:apply` after making changes.
+- On modern JDKs (24+), Google Java Format needs access to internal `jdk.compiler`
+  packages; without it Spotless falls back to a `sun.misc.Unsafe` hack that prints
+  a "terminally deprecated method in sun.misc.Unsafe" warning on every build. The
+  required `--add-exports`/`--add-opens` flags live in `.mvn/jvm.config` (applied to
+  the Maven JVM itself) — keep that file, or the deprecation warning returns.
+- On modern JDKs (24+), Netty (Spring AI's HTTP client transport) calls the
+  restricted `System::loadLibrary` when the app first talks to Ollama/OpenAI, which
+  prints a "restricted method ... native access" warning. It's silenced by granting
+  native access to the *application* JVM (not the Maven JVM): the
+  `spring-boot-maven-plugin` sets `<jvmArguments>--enable-native-access=ALL-UNNAMED`
+  for `spring-boot:run`, and the `maven-jar-plugin` adds an `Enable-Native-Access:
+  ALL-UNNAMED` manifest entry (preserved by the Boot repackage goal) so `java -jar`
+  is clean too. Keep both, or the runtime warning returns.
 
 ## Quality checks
 
@@ -169,10 +182,17 @@ These exist because they are the substance of the demo — don't quietly undo th
     WITH Classpath-exception" SPDX expression), add it to `allow-dependencies-licenses`
     in the workflow rather than widening the allow-list.
 - All third-party GitHub Actions (`actions/checkout`, `actions/setup-java`,
-  `actions/upload-artifact`, `actions/dependency-review-action`) are pinned to their
-  latest major version tags — check https://github.com/<action>/releases when adding
-  new actions or bumping these, and keep both workflow files (`build-and-test.yml`
-  and `copilot-setup-steps.yml`) consistent with each other.
+  `actions/upload-artifact`, `actions/dependency-review-action`,
+  `dependabot/fetch-metadata`) are pinned to their latest major version tags — check
+  https://github.com/<action>/releases when adding new actions or bumping these, and
+  keep both workflow files (`build-and-test.yml` and `copilot-setup-steps.yml`)
+  consistent with each other.
+- `.github/workflows/dependabot-auto-merge.yml` enables GitHub's native auto-merge
+  (`gh pr merge --auto --squash`) for `dependabot[bot]` pull requests, so dependency
+  updates that pass the required checks merge without manual intervention. This only
+  works if branch protection on `main` marks the CI checks as *required* (otherwise
+  `--auto` has nothing to gate on) and repository setting "Allow auto-merge" is
+  enabled — both are repo/GitHub settings, not something the workflow can configure.
 - This is separate from `.github/workflows/copilot-setup-steps.yml`, which only
   preconfigures Copilot's own cloud-agent environment and is not a CI/test workflow.
 - If you add a new opt-in test suite/profile, wire it into this workflow (a new job

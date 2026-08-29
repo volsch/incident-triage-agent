@@ -9,10 +9,9 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.support.ResourcePatternResolver;
-import org.springframework.stereotype.Component;
+import org.springframework.stereotype.Repository;
 
 /**
  * Loads local runbook markdown files at startup and performs simple, dependency-free keyword
@@ -25,7 +24,7 @@ import org.springframework.stereotype.Component;
  * match "in" inside "instance" and "the" inside "there", so every query would return every runbook
  * — which would make this tool useless and its comparison with semantic search meaningless.
  */
-@Component
+@Repository
 class RunbookRepository {
 
   /** A single runbook section: its source filename and the section's markdown text. */
@@ -136,12 +135,31 @@ class RunbookRepository {
       return List.of();
     }
     return Arrays.stream(query.toLowerCase(Locale.ROOT).split("[^a-z0-9-]+"))
-        .map(token -> token.replaceAll("^-+|-+$", ""))
+        .map(RunbookRepository::stripHyphens)
         .filter(token -> token.length() >= MIN_KEYWORD_LENGTH)
         .filter(token -> !STOP_WORDS.contains(token))
         .distinct()
         .map(RunbookRepository::wholeWordPattern)
-        .collect(Collectors.toUnmodifiableList());
+        .toList();
+  }
+
+  /**
+   * Removes any leading and trailing hyphens left over after tokenizing, so that a token like
+   * {@code "-api-"} is matched as {@code "api"}.
+   *
+   * @param token the raw token, possibly wrapped in hyphens
+   * @return the token with leading and trailing hyphens stripped
+   */
+  private static String stripHyphens(String token) {
+    int start = 0;
+    int end = token.length();
+    while (start < end && token.charAt(start) == '-') {
+      start++;
+    }
+    while (end > start && token.charAt(end - 1) == '-') {
+      end--;
+    }
+    return token.substring(start, end);
   }
 
   /**

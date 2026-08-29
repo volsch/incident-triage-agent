@@ -12,8 +12,8 @@ class ToolCallRecorderTest {
   @Test
   void recordsCallsInInvocationOrder() {
     recorder.start();
-    recorder.record("getSystemStatus", "customer-api", "healthy=false");
-    recorder.record("searchRunbook", "5xx", "no matches");
+    recorder.recordCall("getSystemStatus", "customer-api", "healthy=false");
+    recorder.recordCall("searchRunbook", "5xx", "no matches");
 
     assertThat(recorder.recordedCalls())
         .containsExactly(
@@ -22,7 +22,7 @@ class ToolCallRecorderTest {
 
   @Test
   void startDiscardsEntriesLeftOverFromAnEarlierRun() {
-    recorder.record("getSystemStatus", "stale", "stale result");
+    recorder.recordCall("getSystemStatus", "stale", "stale result");
 
     recorder.start();
 
@@ -39,10 +39,10 @@ class ToolCallRecorderTest {
   @Test
   void recordedCallsAreImmutable() {
     recorder.start();
-    recorder.record("searchRunbook", "5xx", "no matches");
+    recorder.recordCall("searchRunbook", "5xx", "no matches");
 
     var calls = recorder.recordedCalls();
-    recorder.record("searchRunbook", "latency", "no matches");
+    recorder.recordCall("searchRunbook", "latency", "no matches");
 
     assertThat(calls).hasSize(1);
   }
@@ -50,7 +50,7 @@ class ToolCallRecorderTest {
   @Test
   void clearReleasesRecordedState() {
     recorder.start();
-    recorder.record("searchRunbook", "5xx", "no matches");
+    recorder.recordCall("searchRunbook", "5xx", "no matches");
 
     recorder.clear();
 

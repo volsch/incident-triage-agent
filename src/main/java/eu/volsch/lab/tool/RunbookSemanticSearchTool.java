@@ -76,7 +76,7 @@ public class RunbookSemanticSearchTool {
             .build();
     List<Document> results = runbookVectorStore.similaritySearch(request);
     List<String> matches = results.stream().map(RunbookSemanticSearchTool::describe).toList();
-    recorder.record("searchRunbookSemantic", query, Runbooks.summarize(matches));
+    recorder.recordCall("searchRunbookSemantic", query, Runbooks.summarize(matches));
     return matches;
   }
 

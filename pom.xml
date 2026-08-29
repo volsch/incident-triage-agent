@@ -109,6 +109,28 @@
 			<plugin>
 				<groupId>org.springframework.boot</groupId>
 				<artifactId>spring-boot-maven-plugin</artifactId>
+				<configuration>
+					<!-- Netty (Spring AI's HTTP client transport) calls the restricted
+					     System::loadLibrary to load its native transport, which prints a
+					     "restricted method ... native access" warning on the first request
+					     under JDK 24+. Grant native access so `spring-boot:run` starts clean. -->
+					<jvmArguments>--enable-native-access=ALL-UNNAMED</jvmArguments>
+				</configuration>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-jar-plugin</artifactId>
+				<configuration>
+					<archive>
+						<manifestEntries>
+							<!-- Manifest equivalent of enabling native access for ALL-UNNAMED, so
+							     a `java -jar` run of the repackaged executable jar is likewise free
+							     of Netty's JDK 24+ native-access warning. Preserved by the Spring
+							     Boot repackage goal. -->
+							<Enable-Native-Access>ALL-UNNAMED</Enable-Native-Access>
+						</manifestEntries>
+					</archive>
+				</configuration>
 			</plugin>
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
@@ -153,7 +175,7 @@
 				     unformatted code; auto-fix with `./mvnw spotless:apply`. -->
 				<groupId>com.diffplug.spotless</groupId>
 				<artifactId>spotless-maven-plugin</artifactId>
-				<version>3.10.0</version>
+				<version>3.10.1</version>
 				<configuration>
 					<java>
 						<googleJavaFormat>

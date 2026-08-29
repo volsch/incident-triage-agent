@@ -36,7 +36,7 @@ public class ToolCallRecorder {
    * @param argument the argument the model passed to it
    * @param result a human-readable rendering of what the tool actually returned
    */
-  void record(String toolName, String argument, String result) {
+  void recordCall(String toolName, String argument, String result) {
     calls.get().add("%s(%s) -> %s".formatted(toolName, argument, result));
   }
 

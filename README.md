@@ -818,6 +818,13 @@ A GitHub Actions workflow (`.github/workflows/build-and-test.yml`) runs on pushe
    explicit allow-list (Apache/MIT/BSD/EPL/CDDL/LGPL/etc.), or a high/critical severity
    known vulnerability — see [License](#license).
 
+A separate workflow (`.github/workflows/dependabot-auto-merge.yml`) enables GitHub's
+native auto-merge (`gh pr merge --auto --squash`) on pull requests opened by
+`dependabot[bot]`, so dependency updates that pass the required checks are merged
+automatically. This requires branch protection on `main` to mark the CI checks as
+*required* and the repository's "Allow auto-merge" setting to be enabled — both are
+GitHub repository settings, not part of the workflow itself.
+
 ```mermaid
 flowchart LR
     Push(["push / pull_request"]) --> BT["build-and-test<br/>verify: tests + Spotless + SpotBugs + JaCoCo"]
@@ -830,7 +837,8 @@ All jobs except `dependency-review` (which needs a pull-request diff) can also b
 triggered manually via `workflow_dispatch`. The integration job has a 20-minute timeout
 to accommodate the model pulls on a cold cache. All third-party GitHub Actions used
 (`actions/checkout`, `actions/setup-java`, `actions/upload-artifact`,
-`actions/dependency-review-action`) are pinned to their latest major versions.
+`actions/dependency-review-action`, `dependabot/fetch-metadata`) are pinned to their
+latest major versions.
 
 ## Code Quality & Style
 

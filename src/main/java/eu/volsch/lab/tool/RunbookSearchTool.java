@@ -39,7 +39,7 @@ public class RunbookSearchTool {
       @ToolParam(description = "Keywords describing the symptom, e.g. '5xx errors' or 'latency'")
           String query) {
     List<String> matches = repository.search(query);
-    recorder.record("searchRunbook", query, Runbooks.summarize(matches));
+    recorder.recordCall("searchRunbook", query, Runbooks.summarize(matches));
     return matches;
   }
 }
