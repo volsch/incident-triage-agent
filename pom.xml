@@ -233,7 +233,7 @@
 				     instruction and branch coverage overall. -->
 				<groupId>org.jacoco</groupId>
 				<artifactId>jacoco-maven-plugin</artifactId>
-				<version>0.8.15</version>
+				<version>0.8.16</version>
 				<configuration>
 					<!-- Written to a dedicated property (not the default "argLine") so it can
 					     be combined with the Mockito static javaagent in the surefire
