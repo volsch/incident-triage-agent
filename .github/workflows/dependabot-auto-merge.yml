@@ -28,7 +28,14 @@ jobs:
           github-token: "${{ secrets.GITHUB_TOKEN }}"
 
       - name: Enable auto-merge
-        run: gh pr merge --auto --squash "$PR_URL"
+        run: |
+          auto_merge_allowed=$(gh api "repos/$GH_REPO" --jq '.allow_auto_merge')
+          if [[ "$auto_merge_allowed" != "true" ]]; then
+            echo "::warning::Auto-merge is disabled. Enable 'Allow auto-merge' in repository Settings > General > Pull Requests."
+            exit 0
+          fi
+          gh pr merge --auto --squash "$PR_URL"
         env:
+          GH_REPO: ${{ github.repository }}
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
