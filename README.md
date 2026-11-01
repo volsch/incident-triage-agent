@@ -824,6 +824,9 @@ native auto-merge (`gh pr merge --auto --squash`) on pull requests opened by
 automatically. This requires branch protection on `main` to mark the CI checks as
 *required* and the repository's "Allow auto-merge" setting to be enabled — both are
 GitHub repository settings, not part of the workflow itself.
+Enable "Allow auto-merge" under **Settings → General → Pull Requests**. When this
+setting is disabled, the workflow skips enabling auto-merge with a warning;
+dependency PRs remain open for manual merging.
 
 ```mermaid
 flowchart LR
